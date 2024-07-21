@@ -3,6 +3,7 @@ import logging
 import re
 import sqlite3
 
+import dash
 import dash_bootstrap_components as dbc
 import numpy as np
 import pandas as pd
@@ -69,6 +70,7 @@ def display_page(pathname):
     [
         Output("upload-status", 'children'),
         Output("year_dropdown", 'options'),
+        Output("year_dropdown", 'value'),
     ],
     [
         Input('upload-data', 'contents')
@@ -86,15 +88,15 @@ def starter(list_of_contents, list_of_names):
                 
                 # TODO:  add update form
                 annees = get_annees(con)
-                annees = {an: an for an in annees}
+                annees_dict = {an: an for an in annees}
                 
-                return [r, annees] # return status of the import
+                return [r, annees_dict, max(annees)] # return status of the import
         except Exception as e:
             print(f'error: {e}')
-            return [None, None]
+            return [None, None, None]
     annees = get_annees(con)
-    annees = {an: an for an in annees}
-    return [None, annees]
+    annees_dict = {an: an for an in annees}
+    return [None, annees_dict, max(annees)]
 
 
 @callback(
@@ -210,6 +212,97 @@ def get_plot(selected_year):
         return [dcc.Graph(figure=fig), dcc.Graph(figure=fig2), dcc.Graph(figure=fig3)]
     return [None, None, None]
 
+
+
+##############################
+##############################
+# ANNOTATION
+
+# button for annotation creation
+@callback(
+    [
+        Output("button_for_classification", "children"),
+        Output("text_to_classify_div", 'children'),
+        Output("current-data-div", "children")
+    ],
+    [
+        # Input("auto_classify", "n_clicks"),
+        Input('new_fam', 'value')
+    ],
+    [State("current-data", 'data')]
+)
+def annotation_load(new_fam, text_to_classify):
+    df, famille = get_annoation_data(con)
+    
+    if new_fam:
+        logging.info(f"{text_to_classify} is {new_fam}")
+        
+        df = update_data(df, text_to_classify.get('first_id'), categorie=new_fam, famille=famille)
+        
+    first_id = df.index.tolist()[0]
+    color = "green" if df.loc[first_id].montant > 0 else "red"
+    date = f"{df.loc[first_id].jour}/{df.loc[first_id].mois}/{df.loc[first_id].annee}" 
+    
+    text = [
+        html.Span(date, style={'float': 'left', 'margin-right': '20px'}),
+        html.Span(df.loc[first_id].operation, style={'margin': '0 auto'}),
+        html.Span(f"{df.loc[first_id].montant:.2f}", style={'color': color, 'float': 'right'})
+    ]
+    data_store = {
+        'first_id': first_id,
+        # 'data': df.loc[first_id].to_dict()
+    }
+    
+    new_component = [dbc.Button(fam, color="light", id={'type': 'dynamic-button', 'index': fam}, className="me-1 space") for fam in set(famille.values())]
+    return [new_component, html.Div(text, style={'display': 'flex', 'justify-content': 'space-between'}, id="text_to_classify"), dcc.Store(data=data_store,id='current-data')]
+    
+
+# annotation process
+@callback(
+    [
+        Output("text_to_classify", "children"),
+        Output('current-data', 'data')
+    ],
+    Input({'type': 'dynamic-button', 'index': dash.dependencies.ALL}, 'n_clicks'),
+    State("current-data", "data")
+)
+def update_annotation(n_clicks, text_to_classify):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return dash.no_update
+    else:
+        print('coucou', n_clicks)
+        if sum(n or 0 for n in n_clicks) == 0 : 
+            return dash.no_update
+        
+        df, famille = get_annoation_data(con)
+        categorie = eval(ctx.triggered[0]['prop_id'].split('.')[0]).get('index')
+        
+        logging.info(f"{text_to_classify} is {categorie}")
+        
+        df = update_data(df, text_to_classify.get('first_id'), categorie=categorie, famille=famille)
+        
+        first_id = df.index.tolist()[0]
+        color = "green" if df.loc[first_id].montant > 0 else "red"
+        date = f"{df.loc[first_id].jour}/{df.loc[first_id].mois}/{df.loc[first_id].annee}"
+        
+        text = [
+            html.Span(date, style={'float': 'left', 'margin-right': '20px'}),
+            html.Span(df.loc[first_id].operation, style={'margin': '0 auto'}),
+            html.Span(f"{df.loc[first_id].montant:.2f}", style={'color': color, 'float': 'right'})
+        ]
+        
+        data_store = {
+            'first_id': first_id,
+            # 'data': df.loc[first_id].to_dict()
+        }
+        
+        # update famille.json
+        # update annotation.db
+        # update budget.db
+        
+        return [text, data_store]
+        
 def credit_per_fam(df):
     negatif = df[df.montant<0].groupby(['categorie']).sum()
     lab = negatif.index.tolist()
@@ -283,7 +376,6 @@ def _process_data_input(df):
     
     status_output.append(dbc.Alert('Data Imported', color="success"))
     return status_output
-    # st.success('Data Imported', icon="✅")
 
 def get_tot_per_month(df):
     positif = df[df.montant>0].groupby(['mois']).sum()
@@ -329,3 +421,48 @@ def has_data(_con):
     cur = _con.cursor()
     cur.execute("SELECT COUNT(*) FROM budget;")
     return cur.fetchone()[0] != 0
+
+def update_data(df, first_id, categorie, famille):
+    """update data to annotate and annotated db on click
+
+    Args:
+        df (pd.DataFrame): transition dataframe
+        first_id (int): df index of annotated row
+        categorie (str): budget category
+    """
+    data = df.loc[first_id].to_frame().T
+    data['categorie'] = categorie
+    df = df.drop(first_id)
+    
+    update_famille(famille, operation=data.operation.tolist()[0], categorie=categorie)
+    
+    ## ajouter un bouton verbose pour voir les lignes insérées et supprimées
+    # suppresion des données annotée dans la base de transition
+    con.execute(f"DELETE FROM transition WHERE id == {data.id.values[0]};")
+    con.commit()
+    
+    # comptage du nombre de données restantes à annoter
+    cur = con.cursor()
+    cur.execute("SELECT count(*) FROM transition;")
+    nb_lines = cur.fetchall()
+    
+    # insertion des données dans la base propre
+    data = data.drop(columns=['id'])
+    data.to_sql(name='budget', con=con, if_exists='append', index=False)
+    
+    logging.info(f'{data.values} INSERTED INTO budget - category: {categorie}')    
+    logging.info(f'{nb_lines[0][0]} lines to annotate')
+
+    return df
+
+def update_famille(famille, operation, categorie):
+    if _parse_operation(operation) in famille.keys():
+        return
+    
+    famille[_parse_operation(operation)] = categorie
+    with open('famille.json', 'w') as f:
+        json.dump(famille, f)
+    logging.info('famille.json has been updated')
+    
+def _parse_operation(operation: str):
+    return re.sub(r"^(CARTE \d{2}\/\d{2} )", "", operation)
