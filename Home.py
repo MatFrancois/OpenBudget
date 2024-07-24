@@ -29,6 +29,8 @@ def Home():
                 html.Div(className='col-3'),
                 html.Div([
                     html.H1('Home', className='row'),
+                    
+                    html.Div(dcc.Store(id='family_color')),
                     html.Div(p_zone, className='row'),
                     html.Div(upload_data, className='row'),
                     html.Div(html.Div(id="upload-status"), className='row'),

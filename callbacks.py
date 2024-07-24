@@ -10,6 +10,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import Input, Output, State, callback, dcc, html
 from plotly.subplots import make_subplots
+import plotly.express as px
 
 import utils as f
 from annotation import Annotation
@@ -50,9 +51,6 @@ logging.info('connected to db')
 _init_db(con)
 
 
-# à modifier
-with open('famille.json', 'r') as fi:
-    famille = json.load(fi)
 
 # Init function callback
 @callback(
@@ -71,32 +69,43 @@ def display_page(pathname):
         Output("upload-status", 'children'),
         Output("year_dropdown", 'options'),
         Output("year_dropdown", 'value'),
+        Output('family_color', 'data')
     ],
     [
         Input('upload-data', 'contents')
     ],
     [
-        State('upload-data', 'filename')
+        State('upload-data', 'filename'),
+        State('family_color', 'data')
     ]
 )
-def starter(list_of_contents, list_of_names):
+def starter(list_of_contents, list_of_names, current_colors):
     if list_of_contents is not None:
+        logging.info("gneu")
         try:
             dfs = [f.parse_contents(c, n) for c, n in zip(list_of_contents, list_of_names)]
             for d in dfs:
-                r = _process_data_input(d)
+                r = process_data_input(d)
                 
                 # TODO:  add update form
                 annees = get_annees(con)
                 annees_dict = {an: an for an in annees}
                 
-                return [r, annees_dict, max(annees)] # return status of the import
+                return [r, annees_dict, max(annees), current_colors] # return status of the import
         except Exception as e:
             print(f'error: {e}')
-            return [None, None, None]
+            return [None, None, None, current_colors]
+    
     annees = get_annees(con)
+    with open('famille.json', 'r') as f:
+        famille = json.load(f)
+    colors = {fam: px.colors.qualitative.Pastel[i] for i, fam in enumerate(set(famille.values())) if i < (len(px.colors.qualitative.Pastel)-1)}
+
+    if not annees : 
+        return [None, {}, None, colors]
+    
     annees_dict = {an: an for an in annees}
-    return [None, annees_dict, max(annees)]
+    return [None, annees_dict, max(annees), colors]
 
 
 @callback(
@@ -106,9 +115,10 @@ def starter(list_of_contents, list_of_names):
     [
         Input("year_dropdown", "value"),
         Input("months_selection", "value")
-    ]
+    ],
+    State('family_color', 'data')
 )
-def get_pie_plot(selected_year, selected_months):
+def get_pie_plot(selected_year, selected_months, family_colors):
     if selected_year and selected_months:
         df = get_data(con, selected_year)
         
@@ -132,7 +142,8 @@ def get_pie_plot(selected_year, selected_months):
                 labels=lab, values=montant, hole=.3,
                 hovertemplate ='%{text}',
                 text = meta_text,
-                textinfo='value'
+                textinfo='value',
+                color_discrete_map=family_colors
             ), row = (i)//3+1, col=(i+1)%3 or 3)
             
         return [dcc.Graph(figure=fig)]
@@ -144,9 +155,10 @@ def get_pie_plot(selected_year, selected_months):
         Output("main_metrics", "children"),
         Output("waffle", "children")
     ],
-    Input("year_dropdown", "value")
+    Input("year_dropdown", "value"), 
+    State('family_color', 'data')
 )
-def get_plot(selected_year):
+def get_plot(selected_year, family_color):
     if selected_year:
         
         df = get_data(con, selected_year)
@@ -199,15 +211,19 @@ def get_plot(selected_year):
         y, x = credit_per_fam(df)
         fig3 = go.Figure()
         for xi, yi in zip(x, y):
+            args = {}
+            if yi in family_color:
+                args = {"marker_color": family_color.get(yi)}
             fig3.add_trace(go.Bar(
                 name=yi, x=[xi], y=[""],
-                orientation='h',width=[0.3]
+                orientation='h',width=[0.3],
+                **args
             ))
             
         reste_col = "green" if sum(positif_y)+sum(negatif_y) > 0 else "red"
         fig3.add_vline(x=sum(positif_y), line_width=3, line_dash="dash", line_color=reste_col, annotation_text=f"reste : {sum(positif_y)+sum(negatif_y):,.0f}€", annotation_position="top left",annotation_font_color=reste_col)
         fig3.update_layout(barmode='stack',paper_bgcolor='rgba(0,0,0,0)',plot_bgcolor='rgba(0,0,0,0)')
-        fig3.update_xaxes(insiderange=[0, max(sum(negatif_y), sum(positif_y))+1000], title="Date")
+        fig3.update_xaxes(insiderange=[0, max(abs(sum(negatif_y))+1000, sum(positif_y))+1000], title="Date")
         
         return [dcc.Graph(figure=fig), dcc.Graph(figure=fig2), dcc.Graph(figure=fig3)]
     return [None, None, None]
@@ -233,20 +249,21 @@ def get_plot(selected_year):
 )
 def annotation_load(new_fam, text_to_classify):
     df, famille = get_annoation_data(con)
-    
+    if df is None: 
+        return [None, html.Div(dbc.Alert('Nothing to annotate', color="success", dismissable=True, fade=True), style={'display': 'flex', 'justify-content': 'space-between'}, id="text_to_classify"), None]
     if new_fam:
         logging.info(f"{text_to_classify} is {new_fam}")
         
         df = update_data(df, text_to_classify.get('first_id'), categorie=new_fam, famille=famille)
         
-    first_id = df.index.tolist()[0]
-    color = "green" if df.loc[first_id].montant > 0 else "red"
-    date = f"{df.loc[first_id].jour}/{df.loc[first_id].mois}/{df.loc[first_id].annee}" 
+    first_id = df.id.tolist()[0]
+    color = "green" if df[df.id == first_id].montant.tolist()[0] > 0 else "red"
+    date = f"{df[df.id == first_id].jour.tolist()[0]}/{df[df.id == first_id].mois.tolist()[0]}/{df[df.id == first_id].annee.tolist()[0]}" 
     
     text = [
         html.Span(date, style={'float': 'left', 'margin-right': '20px'}),
-        html.Span(df.loc[first_id].operation, style={'margin': '0 auto'}),
-        html.Span(f"{df.loc[first_id].montant:.2f}", style={'color': color, 'float': 'right'})
+        html.Span(df[df.id == first_id].operation.tolist()[0], style={'margin': '0 auto'}),
+        html.Span(f"{df[df.id == first_id].montant.tolist()[0]:.2f}", style={'color': color, 'float': 'right'})
     ]
     data_store = {
         'first_id': first_id,
@@ -271,25 +288,29 @@ def update_annotation(n_clicks, text_to_classify):
     if not ctx.triggered:
         return dash.no_update
     else:
-        print('coucou', n_clicks)
         if sum(n or 0 for n in n_clicks) == 0 : 
             return dash.no_update
         
         df, famille = get_annoation_data(con)
+        if df is None: 
+            return [dbc.Alert('Nothing to annotate', color="success", dismissable=True, fade=True), {}]
+        
         categorie = eval(ctx.triggered[0]['prop_id'].split('.')[0]).get('index')
         
         logging.info(f"{text_to_classify} is {categorie}")
         
         df = update_data(df, text_to_classify.get('first_id'), categorie=categorie, famille=famille)
         
-        first_id = df.index.tolist()[0]
-        color = "green" if df.loc[first_id].montant > 0 else "red"
-        date = f"{df.loc[first_id].jour}/{df.loc[first_id].mois}/{df.loc[first_id].annee}"
+        first_id = df.id.tolist()[0]
+        logging.info(f'new firstid is {first_id}')
+        
+        color = "green" if df[df.id == first_id].montant.tolist()[0] > 0 else "red"
+        date = f"{df[df.id == first_id].jour.tolist()[0]}/{df[df.id == first_id].mois.tolist()[0]}/{df[df.id == first_id].annee.tolist()[0]}" 
         
         text = [
             html.Span(date, style={'float': 'left', 'margin-right': '20px'}),
-            html.Span(df.loc[first_id].operation, style={'margin': '0 auto'}),
-            html.Span(f"{df.loc[first_id].montant:.2f}", style={'color': color, 'float': 'right'})
+            html.Span(df[df.id == first_id].operation.tolist()[0], style={'margin': '0 auto'}),
+            html.Span(f"{df[df.id == first_id].montant.tolist()[0]:.2f}", style={'color': color, 'float': 'right'})
         ]
         
         data_store = {
@@ -303,14 +324,30 @@ def update_annotation(n_clicks, text_to_classify):
         
         return [text, data_store]
         
+@callback(
+    Output("autoclassify_status", "children"),
+    Input("auto_classify", "n_clicks"),
+    State("current-data", "data")
+)
+def autoclassify(n_clicks, text_to_classify):
+    if n_clicks>0:
+        df, _ = get_annoation_data(con)
+        if df is None:
+            return None
+        # remove text to classify from df to not create duplicate
+        df = df[df.id != text_to_classify.get('first_id')]
+        r = auto_classify_processing(df, _con=con)
+        return r
+    else:
+        return None
+        
 def credit_per_fam(df):
     negatif = df[df.montant<0].groupby(['categorie']).sum()
     lab = negatif.index.tolist()
     montant = abs(negatif.montant).tolist()
     return lab, montant
 
-def _process_data_input(df):
-    # + drop la dernière col
+def preprocess_df(df):
     df = df.drop(columns="Unnamed: 5")
 
     # merge des 2 colonnes crédit / débit en 1 seule
@@ -332,24 +369,12 @@ def _process_data_input(df):
     df["mois"] = df["date"].dt.month
     df["annee"] = df["date"].dt.year
     df = df.drop(columns=["date"])
+    return df
 
-    def _parse_operation(operation: str):
-        return re.sub(r"^(CARTE \d{2}\/\d{2} )", "", operation)
-
-    # split en transition et budget
-    def _classify(df, famille):
-        """
-        Split the input dataframe into two sub-dataframes based on the following condition:
-        - If the 'operation' value is in the values of the 'famille' dictionary, return True, except if 'operation' is 'course' and 'montant' % 10 == 0 or 'montant' % 10 == 1.
-        """
-        mask = df.apply(
-            lambda x: _parse_operation(x.operation) in famille.keys() and not ((famille.get(_parse_operation(x.operation)) == 'course') and ((x.montant % 10 == 0) | (x.montant % 10 == 1)))
-            , axis=1
-        )
-        df_budget = df[mask]
-        df_transition = df[~mask]
-        return df_budget, df_transition
-
+def auto_classify_processing(df, _con):
+    with open('famille.json', 'r') as fi:
+        famille = json.load(fi)
+    
     # => stockage dans la BD "à annoter"
     df_budget, df_transition = _classify(df, famille)
 
@@ -358,23 +383,75 @@ def _process_data_input(df):
     if len(df_budget) > 0:
         # add categorie
         print(df_budget)
-        df_budget['categorie'] = df_budget.apply(lambda x: famille.get(x.operation), axis=1)
+        
+        df_budget['categorie'] = df_budget.apply(lambda x: famille.get(_parse_operation(x.operation)), axis=1)
+        logging.info("categories added to budget")
+        
+        df_budget.drop("id", axis=1).to_sql(name='budget', con=_con, if_exists='append', index=False)
+        
+        logging.info(f'{len(df_budget)} lignes auto-classifiées')
+        
+        status_output.append(dbc.Alert(f'{len(df_budget)} lignes auto-classifiées', color="success", dismissable=True, fade=True))
+        
+        # suppression des id classifié de budget dans transition
+        logging.info(f"executing: DELETE FROM transition WHERE id IN ({', '.join(map(str, df_budget.id.tolist()))});")
+        _con.execute(f"DELETE FROM transition WHERE id IN ({', '.join(map(str, df_budget.id.tolist()))});")
+        _con.commit()
+    
+        logging.info(f'{len(df_transition)} lignes restent à annoter')
+        status_output.append(dbc.Alert(f'{len(df_transition)} lignes restent à annoter', color="info", dismissable=True, fade=True))
+        
+    else:
+        status_output.append(dbc.Alert('No new family for data having to be annotated', color="warning", dismissable=True, fade=True))
+    return status_output
+
+def _parse_operation(operation: str):
+    return re.sub(r"^(CARTE \d{2}\/\d{2} )", "", operation)
+
+def _classify(df, famille):
+    """
+    Split the input dataframe into two sub-dataframes based on the following condition:
+    - If the 'operation' value is in the values of the 'famille' dictionary, return True, except if 'operation' is 'course' and 'montant' % 10 == 0 or 'montant' % 10 == 1.
+    """
+    mask = df.apply(
+        lambda x: _parse_operation(x.operation) in famille.keys() and not ((famille.get(_parse_operation(x.operation)) == 'course') and ((x.montant % 10 == 0) | (x.montant % 10 == 1)))
+        , axis=1
+    )
+    df_budget = df[mask]
+    df_transition = df[~mask]
+    return df_budget, df_transition
+
+def process_data_input(df):
+    # split en transition et budget
+
+    df = preprocess_df(df)
+    
+    with open('famille.json', 'r') as fi:
+        famille = json.load(fi)
+    
+    # => stockage dans la BD "à annoter"
+    df_budget, df_transition = _classify(df, famille)
+
+    status_output = []
+
+    if len(df_budget) > 0:
+        # add categorie
+        print(df_budget)
+        df_budget['categorie'] = df_budget.apply(lambda x: famille.get(_parse_operation(x.operation)), axis=1)
         logging.info("categories added to budget")
         
         df_budget.to_sql(name='budget', con=con, if_exists='append', index=False)
         
         logging.info(f'{len(df_budget)} lignes déjà classifiées')
-        status_output.append(dbc.Alert(f'{len(df_budget)} lignes déjà classifiées', color="info"))
-        # st.info(f'{len(df_budget)} lignes déjà classifiées')
+        status_output.append(dbc.Alert(f'{len(df_budget)} lignes déjà classifiées', color="info", dismissable=True, fade=True))
     
     if len(df_transition) > 0:
         df_transition.to_sql(name='transition', con=con, if_exists='append', index=False)
         logging.info(f'{len(df_transition)} lignes ajoutées à annoter')
-        status_output.append(dbc.Alert(f'{len(df_transition)} lignes ajouté à annoter', color="info"))
-        # st.info(f'{len(df_transition)} lignes ajouté à annoter')
+        status_output.append(dbc.Alert(f'{len(df_transition)} lignes ajouté à annoter', color="info", dismissable=True, fade=True))
     
     
-    status_output.append(dbc.Alert('Data Imported', color="success"))
+    status_output.append(dbc.Alert('Data Imported', color="success", dismissable=True, fade=True))
     return status_output
 
 def get_tot_per_month(df):
@@ -414,6 +491,7 @@ def get_annoation_data(_con):
         logging.info(f'df imported successfully, shape: {df.shape}')
     else:
         logging.warning('nothing to annotate')
+        return None, None
     return df, famille
 
 # @callback
@@ -427,12 +505,12 @@ def update_data(df, first_id, categorie, famille):
 
     Args:
         df (pd.DataFrame): transition dataframe
-        first_id (int): df index of annotated row
+        first_id (int): df id (generated id bdd side) of annotated row
         categorie (str): budget category
     """
-    data = df.loc[first_id].to_frame().T
+    data = df[df.id == first_id]
     data['categorie'] = categorie
-    df = df.drop(first_id)
+    new_df = df[df.id != first_id]
     
     update_famille(famille, operation=data.operation.tolist()[0], categorie=categorie)
     
@@ -448,12 +526,17 @@ def update_data(df, first_id, categorie, famille):
     
     # insertion des données dans la base propre
     data = data.drop(columns=['id'])
+    
+    data["annee"] = data["annee"].astype(int)
+    data["mois"] = data["mois"].astype(int)
+    data["jour"] = data["jour"].astype(int)
+    
     data.to_sql(name='budget', con=con, if_exists='append', index=False)
     
     logging.info(f'{data.values} INSERTED INTO budget - category: {categorie}')    
     logging.info(f'{nb_lines[0][0]} lines to annotate')
 
-    return df
+    return new_df
 
 def update_famille(famille, operation, categorie):
     if _parse_operation(operation) in famille.keys():
@@ -464,5 +547,3 @@ def update_famille(famille, operation, categorie):
         json.dump(famille, f)
     logging.info('famille.json has been updated')
     
-def _parse_operation(operation: str):
-    return re.sub(r"^(CARTE \d{2}\/\d{2} )", "", operation)

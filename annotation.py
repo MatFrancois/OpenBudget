@@ -17,12 +17,11 @@ def Annotation():
                 html.Div(className='col-3'),
                 html.Div(
                     [
+                        html.Div(html.H1('Annotation zone'), className="row space"),
                         html.Div(dcc.Store(id='current-data'), id="current-data-div"),
 
-                        html.Div(html.H1('Annotation zone'), className="row"),
                         html.Div(p_zone, className="row"),
                         
-                        html.Div(dbc.Button("AutoClassify", color="info", className="me-1", id="auto_classify"), className="row"),
                         
                         html.Div(html.Div(id="text_to_classify", style={'display': 'flex', 'justify-content': 'space-between'}), className="row", id="text_to_classify_div"),
                         html.Div(html.Div(className="d-grid gap-2 d-md-block", id="button_for_classification")),
@@ -30,6 +29,8 @@ def Annotation():
                         dbc.Input(id="new_fam", placeholder="Nouvelle famille", type="text", debounce=True, className="space"),
 
                         
+                        html.Div(dbc.Button("AutoClassify", color="info", id="auto_classify", n_clicks=0), className="row space"),
+                        html.Div(className="row space",id="autoclassify_status")
                         # dbc.Input(id="hello", debounce=True),
                         # html.Div(html.P(id="output"), id="coco"),
                         # html.Div(id='dynamic-content')
