@@ -40,33 +40,9 @@ def Home():
                     html.Div(className='row', id="graph_zone"),
                     html.Div(className='row', id="main_metrics"),
                     html.Div(className='row', id="waffle"),
-                    html.Div(
-                        dbc.Checklist(
-                            options=[
-                                {"label": "jan", "value": 1},
-                                {"label": "fev", "value": 2},
-                                {"label": "mar", "value": 3},
-                                {"label": "avr", "value": 4},
-                                {"label": "mai", "value": 5},
-                                {"label": "jun", "value": 6},
-                                {"label": "jui", "value": 7},
-                                {"label": "aou", "value": 8},
-                                {"label": "sep", "value": 9},
-                                {"label": "oct", "value": 10},
-                                {"label": "nov", "value": 11},
-                                {"label": "dec", "value": 12},
-                            ],
-                            value=[],
-                            id="months_selection",
-                            inline=True,
-                            className="center"
-                        ),
-                        className='row'
-                    ),
-                    html.Div(className='row', id="pie_graph"),
-                    
                 ], className='col-6'),
                 html.Div(className='col-3'),
+                html.Div(className='row', id="pie_graph"),
             ],className='row'),
 
             html.Div(

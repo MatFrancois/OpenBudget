@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import sqlite3
+import os
 
 import dash
 import dash_bootstrap_components as dbc
@@ -50,7 +51,20 @@ con = _get_con()
 logging.info('connected to db')
 _init_db(con)
 
-
+month_conversion = {
+    1: "jan",
+    2: "fev",
+    3: "mar",
+    4: "avr",
+    5: "mai",
+    6: "jun",
+    7: "jui",
+    8: "aou",
+    9: "sep",
+    10: "oct",
+    11: "nov",
+    12: "dec"
+}
 
 # Init function callback
 @callback(
@@ -99,7 +113,18 @@ def starter(list_of_contents, list_of_names, current_colors):
     annees = get_annees(con)
     with open('famille.json', 'r') as f:
         famille = json.load(f)
-    colors = {fam: px.colors.qualitative.Pastel[i] for i, fam in enumerate(set(famille.values())) if i < (len(px.colors.qualitative.Pastel)-1)}
+        
+    # écrire les couleurs en dur pour qu'elles ne changent pas d'une fois à l'autre
+    colors = {}    
+    if "family_colors.json" in os.listdir():
+        with open("family_colors.json", 'r') as f:
+            colors = json.load(f)
+    if sum(fam not in colors for fam in set(famille.values())) > 0:
+        palette = px.colors.qualitative.Pastel + px.colors.qualitative.Set3
+        colors = {fam: palette[i] for i, fam in enumerate(set(famille.values())) if i < (len(palette))}
+        with open("family_colors.json", 'w') as f:
+            json.dump(colors, f)
+    
 
     if not annees : 
         return [None, {}, None, colors]
@@ -114,38 +139,40 @@ def starter(list_of_contents, list_of_names, current_colors):
     ],
     [
         Input("year_dropdown", "value"),
-        Input("months_selection", "value")
     ],
     State('family_color', 'data')
 )
-def get_pie_plot(selected_year, selected_months, family_colors):
-    if selected_year and selected_months:
+def get_pie_plot(selected_year, family_colors):
+    if selected_year:
         df = get_data(con, selected_year)
-        
-        nrows = (len(selected_months)-1)//3+1
-        ncols = len(selected_months)%3 or 3 if len(selected_months) <= 3 else 3
-        
-        # build specs for pie chart
-        specs = [[{'type':'domain'}]*ncols for _ in range(nrows)]
-        
-        fig = make_subplots(rows=nrows, cols=ncols, specs=specs)
-        for i, month in enumerate(selected_months):
+        specs = [[{'type':'domain'}]*12]
+        fig = make_subplots(rows=1, cols=12, specs=specs)
+        for month in range(12):
+            df_filtered = df[df.mois == month+1]
             
-            df_filtered = df[df.mois == month]
+            # gestion des années incomplète
+            if len(df_filtered) == 0:
+                continue
+            
             lab, montant = credit_per_fam(df_filtered)
-            
+
             # compute hoverlay data = details about aggregation
             meta_text = [str(df_filtered[df_filtered.categorie==l][["jour", "operation", "montant"]]).replace('\n', '<br>') for l in lab]
-            
+
+            color = [family_colors.get(la) for la in lab]
+
             fig.add_trace(go.Pie(
                 name=month,
-                labels=lab, values=montant, hole=.3,
+                title=month_conversion.get(month+1),
+                labels=lab, 
+                values=montant, 
+                marker={"colors": color},
+                hole=.3,
                 hovertemplate ='%{text}',
                 text = meta_text,
                 textinfo='value',
-                color_discrete_map=family_colors
-            ), row = (i)//3+1, col=(i+1)%3 or 3)
-            
+            ), 1, month+1)
+        fig.update_traces(textposition='inside')
         return [dcc.Graph(figure=fig)]
     return [None]
     
@@ -158,7 +185,7 @@ def get_pie_plot(selected_year, selected_months, family_colors):
     Input("year_dropdown", "value"), 
     State('family_color', 'data')
 )
-def get_plot(selected_year, family_color):
+def get_plot(selected_year, family_colors):
     if selected_year:
         
         df = get_data(con, selected_year)
@@ -175,6 +202,16 @@ def get_plot(selected_year, family_color):
             base=0,
             marker_color='#72C453',
             name='Revenues',
+        ))
+        fig.add_trace(go.Scatter(
+            x=positif_x, 
+            y=np.array(positif_y) + np.array(negatif_y),
+            name="Reste",
+            mode="lines+markers+text",
+            line=dict(color='royalblue', width=0),
+            marker=dict(size=10, color=np.where(np.array(positif_y) + np.array(negatif_y) > 0, "green", "darkred")),
+            text=list(map(lambda x: f"{int(x):_}€", (np.array(positif_y) + np.array(negatif_y)).round())),
+            textposition="bottom right"
         ))
         fig.update_layout(
             paper_bgcolor='rgba(0,0,0,0)',
@@ -212,11 +249,12 @@ def get_plot(selected_year, family_color):
         fig3 = go.Figure()
         for xi, yi in zip(x, y):
             args = {}
-            if yi in family_color:
-                args = {"marker_color": family_color.get(yi)}
+            if yi in family_colors:
+                args = {"marker_color": family_colors.get(yi)}
             fig3.add_trace(go.Bar(
                 name=yi, x=[xi], y=[""],
                 orientation='h',width=[0.3],
+                text=xi,
                 **args
             ))
             
@@ -464,13 +502,11 @@ def get_tot_per_month(df):
     negatif_y = negatif.montant.tolist()
     return positif_x, positif_y, negatif_x, negatif_y
 
-# @callback
 def get_annees(_con):
     cur = _con.cursor()
     cur.execute("SELECT DISTINCT(annee) FROM budget;")
     return [annee[0] for annee in cur.fetchall()]
 
-# @callback
 def get_data(_con, annee):
     query = f"SELECT * FROM budget WHERE annee == {annee};"
     df = pd.read_sql_query(query, _con)
