@@ -50,6 +50,10 @@ h5 {
     top: 25%;
   }
   
+  #text_to_classify, #button_for_classification, #auto_classify{
+    margin-top: 20px;
+  }
+
   .space {
     margin-top: 5px;
   }

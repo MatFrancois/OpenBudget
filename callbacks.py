@@ -13,7 +13,7 @@ from dash import Input, Output, State, callback, dcc, html
 from plotly.subplots import make_subplots
 import plotly.express as px
 
-import utils as f
+import utils as fi
 from annotation import Annotation
 from Home import Home
 
@@ -97,7 +97,7 @@ def starter(list_of_contents, list_of_names, current_colors):
     if list_of_contents is not None:
         logging.info("gneu")
         try:
-            dfs = [f.parse_contents(c, n) for c, n in zip(list_of_contents, list_of_names)]
+            dfs = [fi.parse_contents(c, n) for c, n in zip(list_of_contents, list_of_names)]
             for d in dfs:
                 r = process_data_input(d)
                 
@@ -299,9 +299,9 @@ def annotation_load(new_fam, text_to_classify):
     date = f"{df[df.id == first_id].jour.tolist()[0]}/{df[df.id == first_id].mois.tolist()[0]}/{df[df.id == first_id].annee.tolist()[0]}" 
     
     text = [
-        html.Span(date, style={'float': 'left', 'margin-right': '20px'}),
-        html.Span(df[df.id == first_id].operation.tolist()[0], style={'margin': '0 auto'}),
-        html.Span(f"{df[df.id == first_id].montant.tolist()[0]:.2f}", style={'color': color, 'float': 'right'})
+        html.Span(date, style={'float': 'left', 'margin-right': '20px', 'font-size': "150%"}),
+        html.Span(df[df.id == first_id].operation.tolist()[0], style={'margin': '0 auto', 'font-size': "150%"}),
+        html.Span(f"{df[df.id == first_id].montant.tolist()[0]:.2f}", style={'color': color, 'float': 'right', 'font-size': "150%"}),
     ]
     data_store = {
         'first_id': first_id,
@@ -330,14 +330,14 @@ def update_annotation(n_clicks, text_to_classify):
             return dash.no_update
         
         df, famille = get_annoation_data(con)
-        if df is None: 
-            return [dbc.Alert('Nothing to annotate', color="success", dismissable=True, fade=True), {}]
         
         categorie = eval(ctx.triggered[0]['prop_id'].split('.')[0]).get('index')
         
         logging.info(f"{text_to_classify} is {categorie}")
         
         df = update_data(df, text_to_classify.get('first_id'), categorie=categorie, famille=famille)
+        if df is None: 
+            return [dbc.Alert('Nothing to annotate', color="success", dismissable=True, fade=True), {}]
         
         first_id = df.id.tolist()[0]
         logging.info(f'new firstid is {first_id}')
@@ -346,9 +346,9 @@ def update_annotation(n_clicks, text_to_classify):
         date = f"{df[df.id == first_id].jour.tolist()[0]}/{df[df.id == first_id].mois.tolist()[0]}/{df[df.id == first_id].annee.tolist()[0]}" 
         
         text = [
-            html.Span(date, style={'float': 'left', 'margin-right': '20px'}),
-            html.Span(df[df.id == first_id].operation.tolist()[0], style={'margin': '0 auto'}),
-            html.Span(f"{df[df.id == first_id].montant.tolist()[0]:.2f}", style={'color': color, 'float': 'right'})
+            html.Span(date, style={'float': 'left', 'margin-right': '20px', 'font-size': "150%"}),
+            html.Span(df[df.id == first_id].operation.tolist()[0], style={'margin': '0 auto', 'font-size': "150%"}),
+            html.Span(f"{df[df.id == first_id].montant.tolist()[0]:.2f}", style={'color': color, 'float': 'right', 'font-size': "200%"})
         ]
         
         data_store = {
@@ -494,10 +494,20 @@ def process_data_input(df):
 
 def get_tot_per_month(df):
     positif = df[df.montant>0].groupby(['mois']).sum()
+    negatif = df[df.montant<0].groupby(['mois']).sum()
+    
+    # il peut arriver qu'un mois n'ait pas de valeur neg ou positif
+    # negatif missing value : 
+    for mois in positif.index[~positif.index.isin(negatif.index)]:
+        negatif.loc[mois] = 0
+    for mois in negatif.index[~negatif.index.isin(positif.index)]:
+        positif.loc[mois] = 0
+    
+    positif = positif.sort_index()
+    negatif = negatif.sort_index()
+    
     positif_x = positif.index.tolist()
     positif_y = positif.montant.tolist()
-    
-    negatif = df[df.montant<0].groupby(['mois']).sum()
     negatif_x = negatif.index.tolist()
     negatif_y = negatif.montant.tolist()
     return positif_x, positif_y, negatif_x, negatif_y
@@ -571,7 +581,8 @@ def update_data(df, first_id, categorie, famille):
     
     logging.info(f'{data.values} INSERTED INTO budget - category: {categorie}')    
     logging.info(f'{nb_lines[0][0]} lines to annotate')
-
+    if nb_lines[0][0] == 0:
+        return None
     return new_df
 
 def update_famille(famille, operation, categorie):
